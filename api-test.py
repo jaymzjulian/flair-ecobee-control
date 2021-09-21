@@ -49,6 +49,7 @@ def authorize(ecobee_service):
 
 from secrets import *
 from settings import *
+from setpoints import *
 
 
 
@@ -80,11 +81,18 @@ rcount = 0
 force_park = False
 max_delta = -999
 min_delta = 999
+delta_list = []
+actual_vent_count = 0
 for room in rooms:
  if room.attributes['active'] == True:
   print(room.attributes['name'])
   ctemp = room.attributes['current-temperature-c']
-  dtemp = room.attributes['set-point-c']
+  if direct_vent_control:
+    dtemp = direct_setpoints[room.attributes['name']]
+    if direct_setpoints_are_f:
+      dtemp = (dtemp - 32) * (5.0/9.0)
+  else:
+    dtemp = room.attributes['set-point-c']
 
   # Simplied C to F, since flair always repots in C
   if switch_is_f:
@@ -96,6 +104,8 @@ for room in rooms:
     max_delta = n_delta
   if min_delta > n_delta:
     min_delta = n_delta
+
+  delta_list.append([n_delta, room])
 
   print(n_delta)
   if not room.attributes['name'] in no_mode_room:
@@ -123,6 +133,8 @@ for room in rooms:
       print("dead vebt :(")
       force_park = True
       #sys.exit(1)
+    else:
+      actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
     if 'is cooling' in c:
       if int(ctemp*10.0 - 5) > int(dtemp*10.0):
@@ -146,6 +158,34 @@ for room in rooms:
       else:
         print("Skipping heating because ctemp is actually higher than target",ctemp,"vs",dtemp)
         parking = True
+
+if direct_vent_control:
+    if direct_vent_count < actual_vent_count:
+      print("ERROR: actual vent count is greater than stated in configuration - stop lying!")
+      sys.exit(1)
+    # Sort rooms by temprature delta, reversed if we're in cool mode
+    min_open = int(((direct_vent_count)*(100-direct_vent_percent))/100)
+    min_open -= (direct_vent_count - actual_vent_count)
+    print("min_open =",min_open,"out of",actual_vent_count)
+    delta_list = sorted(delta_list)
+    if mode == "cool":
+      delta_list.reverse()
+
+    open_count = 0
+    for d in delta_list:
+      room = d[1]
+      temp_delta = d[0]
+      for vent in room.get_rel('vents'):
+        if open_count < min_open or (temp_delta > 0 and mode == 'cool') or (temp_delta < 0 and mode == 'heat'):
+          if vent.attributes['percent-open'] != 100:
+            print("open vent in",room.attributes['name'],"delta is",temp_delta)
+            vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'opening for '+mode+' due to delta '+str(temp_delta)})
+          open_count += 1
+        else:
+          if vent.attributes['percent-open'] != 0:
+            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'closing for '+mode+' due to delta '+str(temp_delta)})
+            print("close vent in",room.attributes['name'],"delta is",temp_delta)
+    sys.exit(1)
 
 if delta_is_average:
   delta /= rcount
