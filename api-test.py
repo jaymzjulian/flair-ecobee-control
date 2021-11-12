@@ -1,4 +1,6 @@
 from flair_api import make_client
+import pickle
+import os.path
 import sys
 import shelve
 import math
@@ -60,7 +62,6 @@ structures = client.get('structures')
 mode = structures[0].attributes['structure-heat-cool-mode']
 print("Mode is",mode)
 
-no_mode_room = ["Kman"]
 rooms = client.get('rooms')
 
 cooling = False
@@ -99,11 +100,23 @@ for room in rooms:
     n_delta = (ctemp - dtemp) * (9.0/5.0)
   else:
     n_delta = (ctemp - dtemp)
+  
+  # If we're always applying the multiplier, do it before min/max
+  # delta, since that is what actually controlls the thermostat
+  if room.attributes['name'] in pressure_room_multiplier:
+    n_delta *= pressure_room_multiplier[room.attributes['name']]
 
   if max_delta < n_delta:
     max_delta = n_delta
   if min_delta > n_delta:
     min_delta = n_delta
+
+  # Apply our room multiplier here.  it goes AFTER max/min delta,
+  # because we use room_multiplier to avoid a mode switch, but if the room
+  # actually needs cooling, we can just do that... this should prevent the issue where 
+  # we run for "a little bit" all night, which reduces life etc etc etc
+  if room.attributes['name'] in switch_room_multiplier:
+    n_delta *= switch_room_multiplier[room.attributes['name']]
 
   delta_list.append([n_delta, room])
 
@@ -137,8 +150,8 @@ for room in rooms:
       actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
     if 'is cooling' in c:
-      if int(ctemp*10.0 - 5) > int(dtemp*10.0):
-        if (not iamintake) and ctemp > (intake_temp + 0.5) and use_intake_room and (dtemp - ctemp > -2.0):
+      if int(ctemp*10.0 - 3) > int(dtemp*10.0):
+        if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > -2.0):
           print("Room is more than intake temp, give or take - parking instead and relying on fan")
           parking = True
         else:
@@ -148,7 +161,7 @@ for room in rooms:
         print("Skipping cooling because ctemp is actually lower than target",ctemp,"vs",dtemp)
         parking = True
     if 'is heating' in c:
-      if int(ctemp*10.0 + 5) < int(dtemp*10.0):
+      if int(ctemp*10.0 + 3) < int(dtemp*10.0):
         if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < 2.0):
           print("Room is less than intake temp - parking instead and relying on fan", ctemp, intake_temp, dtemp - ctemp)
           parking = True
@@ -160,9 +173,8 @@ for room in rooms:
         parking = True
 
 if direct_vent_control:
-    if direct_vent_count < actual_vent_count:
-      print("ERROR: actual vent count is greater than stated in configuration - stop lying!")
-      sys.exit(1)
+    # We add this here since this only counts non-flair vents
+    direct_vent_count += actual_vent_count
     # Sort rooms by temprature delta, reversed if we're in cool mode
     min_open = int(((direct_vent_count)*(100-direct_vent_percent))/100)
     min_open -= (direct_vent_count - actual_vent_count)
@@ -199,24 +211,51 @@ print("Heating:",heating)
 print("parking",parking)
 print("Delta Temp:",delta, min_delta, max_delta)
 
+if os.path.exists("deltat.txt"):
+  r = open("deltat.txt", "rb")
+  last_delta = pickle.load(r)
+  r.close()
+else:
+  last_delta = []
+
+print(last_delta)
+last_delta.append(delta)
+last_delta = last_delta[-delta_cycles:]
+print(last_delta)
+f = open("deltat.txt","wb")
+pickle.dump(last_delta, f)
+f.close()
+
 # if we have to only move a small amount, tell the
 # thermostat that instead of the max delta specified
-min_delta *= 10
-max_delta *= 10
+#
+# using *5 ibsyead if *10 here to dampen
+min_delta *= cool_system_delta
+max_delta *= heat_system_delta
 if cool_offs > max_delta:
-  cool_offs = max_delta
+  cool_offs = max_delta 
 if heat_offs > 0-min_delta:
   heat_offs = 0-min_delta
 #print(cool_offs, heat_offs)
 
+cool_switch_hit = True
+heat_switch_hit = True
+for d in last_delta:
+  if d < cool_switch_threshold:
+    cool_switch_hit = False
+  if d > 0-heat_switch_threshold:
+    heat_switch_hit = False
+
+print("cs: ",cool_switch_hit)
+print("hs: ",heat_switch_hit)
 if (cooling == False and heating == False) or only_switch_when_complete == False:
- if delta > cool_switch_threshold and mode == 'heat':
+ if cool_switch_hit and mode == 'heat':
   print("House is heating, but overall delta is",delta,"above target - switching to cooling")
   structures[0].update(attributes={'structure-heat-cool-mode': 'cool'})
   heating = False
   coolibg = False
   parking = True
-if delta < 0-heat_switch_threshold and mode == 'cool':
+if heat_switch_hit and mode == 'cool':
   print("House is cooling, but overall delta is",0-delta,"below target - switching to heating")
   structures[0].update(attributes={'structure-heat-cool-mode': 'heat'})
   heating = False
@@ -259,7 +298,7 @@ elif heating:
   max_desired = (temp + heat_offs)
   desired = ts.thermostat_list[0].runtime.desired_heat
   if desired != max_desired:
-    print("Updating to",max_desired/10)
+    print("Updating to",max_desired/10,"from",temp)
     update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10)-4, heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE)
   else:
     print("Heating is okay!")
