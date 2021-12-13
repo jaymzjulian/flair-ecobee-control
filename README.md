@@ -28,3 +28,7 @@ screen -m 'while true; do python3 ./flair-ecobeepy ; sleep 120 ; done'
 ```
 
 But of course, eventually you almost certainly want to run it from cron or systemd
+
+Tips
+----
+When starting out tuning your settings, do monitor the ecobee system stats to ensure that you're not constantly cycling your HVAC - that's the major reason for the temprature pressure options in the settings.  The issue we had, was the warm room was heating the vents themselves - this heat would dissapate, but originally the system was aggressive enough that it was turning on the AC and, well, a bad time was had by all.  Reducing the pressure setting for the super cold room worked this out.
