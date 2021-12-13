@@ -249,13 +249,13 @@ for d in last_delta:
 print("cs: ",cool_switch_hit)
 print("hs: ",heat_switch_hit)
 if (cooling == False and heating == False) or only_switch_when_complete == False:
- if cool_switch_hit and mode == 'heat':
+ if cool_switch_hit and (mode == 'heat' or (force_mode == True and mode != 'cool')):
   print("House is heating, but overall delta is",delta,"above target - switching to cooling")
   structures[0].update(attributes={'structure-heat-cool-mode': 'cool'})
   heating = False
   coolibg = False
   parking = True
-if heat_switch_hit and mode == 'cool':
+if heat_switch_hit and (mode == 'cool' or (force_mode == True and mode != 'heat')):
   print("House is cooling, but overall delta is",0-delta,"below target - switching to heating")
   structures[0].update(attributes={'structure-heat-cool-mode': 'heat'})
   heating = False

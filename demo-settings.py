@@ -17,7 +17,7 @@ heat_system_delta = 5
 cool_switch_threshold = 4.0
 # Switch to heat when the squared temprature difference is below this 
 # Since this is all rooms added together, we _probably_ should average ir or something...
-heat_switch_threshold = 6.0
+heat_switch_threshold = 5.0
 
 # How many cycles must be be out of range for before we switch types
 # JJ fixme: this needs to be in minutes, not cycles....
@@ -45,6 +45,11 @@ use_intake_room = False
 intake_room = "Kitchen / living room"
 
 # set this to obly switch mode when the nothing is heathibg/coolibg
+# This can be useful if you have one room that only gets occupied at 
+# certain parts of the day, and you want to ensure that when it _does_ get
+# occupied, it continues to cool/heat until it reaches target temprature
+#
+# It can also avoid short cycling.  It will, however, lead to less accurate tempratures.
 only_switch_when_complete = False
 
 # Bypass flair's automatic vent control, and control them manually?
@@ -65,14 +70,27 @@ direct_vent_percent = 30
 # inside it wants their room way colder than the rest of the house, but can deal
 # with a larger temprature range if it "eventually" gets back there - this
 # avoids his room turning off the heating to the rest of the house!
-switch_room_multiplier = { 'Kman': 0.5 }
-        }
+#
+# The reason you would avoid this, is because you can't generally just do "one" room,
+# and so backpressure prevcention will ensure that, even if you're cooling/heating just
+# one room, some of that will go into other rooms - so maybe you want to
+# entirely back off while this is happening, to avoid affecting other rooms.  
+# In that case, pressure_room_multiplier is a better option, but of course
+# beware of short cycling!
+switch_room_multiplier = { 'Kman': 0.7 }
 
 # Pressure room multiplier affects _both_ - use this when you
 # want to also not blow as much air into a room.  This is used to
 # compensate for a laggy thermostat gnerally (in my case, the ecobee
 # unit itself is slow to update, but the flair puck and ecobee sensors are
 # fast, so I put the room with that in here)
+#
+# Note that this can cause "short cycling", where it will run the air
+# for short amounts of time to maintain the temprature.  Depending on 
+# your unit, this can be a bad thing...
 pressure_room_multiplier = {
         'Kitchen / living room': 0.7,
         'Front': 0.6 }
+
+# Force mode override, even if someohe marks it auto
+force_mode = True
