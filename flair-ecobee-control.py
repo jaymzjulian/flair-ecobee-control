@@ -84,6 +84,8 @@ max_delta = -999
 min_delta = 999
 delta_list = []
 actual_vent_count = 0
+need_force_cool = False
+need_force_heat = False
 for room in rooms:
  if room.attributes['active'] == True:
   print(room.attributes['name'])
@@ -105,6 +107,13 @@ for room in rooms:
   # delta, since that is what actually controlls the thermostat
   if room.attributes['name'] in pressure_room_multiplier:
     n_delta *= pressure_room_multiplier[room.attributes['name']]
+
+  if (n_delta*n_delta) > cool_switch_emergency and n_delta > 0:
+    print("Forcing cool due to",room.attributes['name'])
+    need_force_cool = True
+  if (n_delta*n_delta) > heat_switch_emergency and n_delta < 0:
+    print("Forcing heat due to",room.attributes['name'])
+    need_force_heat = True
 
   if max_delta < n_delta:
     max_delta = n_delta
@@ -149,7 +158,8 @@ for room in rooms:
     else:
       actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
-    if 'is cooling' in c:
+    if 'needs cooling' in c or 'is cooling' in c:
+      print(ctemp,dtemp)
       if int(ctemp*10.0 - 3) > int(dtemp*10.0):
         if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > -2.0):
           print("Room is more than intake temp, give or take - parking instead and relying on fan")
@@ -160,7 +170,7 @@ for room in rooms:
       else:
         print("Skipping cooling because ctemp is actually lower than target",ctemp,"vs",dtemp)
         parking = True
-    if 'is heating' in c:
+    if 'needs heating' in c or 'is heating' in c:
       if int(ctemp*10.0 + 3) < int(dtemp*10.0):
         if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < 2.0):
           print("Room is less than intake temp - parking instead and relying on fan", ctemp, intake_temp, dtemp - ctemp)
@@ -246,20 +256,28 @@ for d in last_delta:
   if d > 0-heat_switch_threshold:
     heat_switch_hit = False
 
+if need_force_cool and (not need_force_heat):
+    cool_switch_hit = True
+    heat_switch_hit = False
+elif need_force_heat and (not need_force_cool):
+    cool_switch_hit = False
+    heat_switch_hit = True
+
 print("cs: ",cool_switch_hit)
 print("hs: ",heat_switch_hit)
+
 if (cooling == False and heating == False) or only_switch_when_complete == False:
  if cool_switch_hit and (mode == 'heat' or (force_mode == True and mode != 'cool')):
   print("House is heating, but overall delta is",delta,"above target - switching to cooling")
   structures[0].update(attributes={'structure-heat-cool-mode': 'cool'})
   heating = False
-  coolibg = False
+  cooling = False
   parking = True
-if heat_switch_hit and (mode == 'cool' or (force_mode == True and mode != 'heat')):
+ if heat_switch_hit and (mode == 'cool' or (force_mode == True and mode != 'heat')):
   print("House is cooling, but overall delta is",0-delta,"below target - switching to heating")
   structures[0].update(attributes={'structure-heat-cool-mode': 'heat'})
   heating = False
-  coolibg = False
+  cooling = False
   parking = True
 
 try:

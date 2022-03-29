@@ -15,9 +15,14 @@ heat_system_delta = 5
 # settings below (switch_is_f, delta_is_average, delta_is_max) and excludes rooms in
 # the list no_mode_room
 cool_switch_threshold = 4.0
+# Switch to cool if we _ever_ excceed this, ignoring the 
+# heat switch
+cool_switch_emergency = 8.0
 # Switch to heat when the squared temprature difference is below this 
 # Since this is all rooms added together, we _probably_ should average ir or something...
 heat_switch_threshold = 5.0
+# Swithc to heat if we ever exceed this, ignoring the cool switch
+heat_switch_emergency = 128.0
 
 # How many cycles must be be out of range for before we switch types
 # JJ fixme: this needs to be in minutes, not cycles....
