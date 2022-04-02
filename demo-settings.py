@@ -99,3 +99,11 @@ pressure_room_multiplier = {
 
 # Force mode override, even if someohe marks it auto
 force_mode = True
+
+never_heat = [ 'Cat and duck' ]
+never_cool = [ 'Possum' ]
+# Should we close vents when they hit target?
+# Note this can cause backpressure, but hopefully
+# the flair will do backpressure protext?
+close_on_target = True
+close_offset = 3

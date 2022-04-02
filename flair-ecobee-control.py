@@ -102,6 +102,11 @@ for room in rooms:
     n_delta = (ctemp - dtemp) * (9.0/5.0)
   else:
     n_delta = (ctemp - dtemp)
+
+  if room.attributes['name'] in never_cool and n_delta > 0:
+    n_delta = 0
+  if room.attributes['name'] in never_heat and n_delta < 0:
+    n_delta = 0
   
   # If we're always applying the multiplier, do it before min/max
   # delta, since that is what actually controlls the thermostat
@@ -158,7 +163,40 @@ for room in rooms:
     else:
       actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
+    print(c)
+    print(ctemp,dtemp)
+    if 'Manual' in c:
+      print("Found manual vent in mode",mode,"in state",vent.attributes['percent-open'])
+      print("h: at",ctemp*10 - close_offset,"want",dtemp*10)
+      print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
+      # If vent is _above_ the temp by cool offset, we want to start cooling
+      # since we want temp to go _down_ - so open the vent
+      if int(ctemp*10.0 + close_offset) > int(dtemp*10.0) and mode == 'cool':
+        print("Vent was closed by us, but should be cooling")
+        if vent.attributes['percent-open'] == 0:
+          vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is cooling'})
+      # If vent is _below_ the temp by heat offset, we want to start heating
+      # since we want the temp to go _up_ - so open the vent
+      if int(ctemp*10.0 - close_offset) < int(dtemp*10.0) and mode == 'heat':
+        print("Vent was closed by us, but should be heating")
+        if vent.attributes['percent-open'] == 0:
+          vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is heating'})
+      # If we have a manual open vent, mock the state
+      if vent.attributes['percent-open'] == 100:
+        if mode == 'cool':
+          c = 'Room is cooling'
+        elif mode == 'heat':
+          c = 'Room is heating'
+
+
     if 'needs cooling' in c or 'is cooling' in c:
+      # We close if we should never cool - we trust, for now, that the flair
+      # will open it again.  
+      if room.attributes['name'] in never_cool:
+        print("Vent is cooling, but room is in never cool list - force closing!")
+        if vent.attributes['percent-open'] == 100:
+          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but vent is in never_cool list'})
+
       print(ctemp,dtemp)
       if int(ctemp*10.0 - 3) > int(dtemp*10.0):
         if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > -2.0):
@@ -169,8 +207,20 @@ for room in rooms:
           cooling = True
       else:
         print("Skipping cooling because ctemp is actually lower than target",ctemp,"vs",dtemp)
+        # if we're closing on target, then we close the vent now.  We undo this if that is no longer met
+        # We do this if the vent is _above_ the target by close_offset - i.e. dont we want it to 
+        # go down.  If that temp is _higher_, then we want cool
+        if close_on_target and int(ctemp*10.0 - close_offset) > int(dtemp*10.0):
+          print("Vent is open, but we hit cool target - force closing")
+          if vent.attributes['percent-open'] == 100:
+            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but hit target'})
         parking = True
     if 'needs heating' in c or 'is heating' in c:
+      if room.attributes['name'] in never_heat:
+        print("Vent is cooling, but room is in never cool list - force closing!")
+        if vent.attributes['percent-open'] == 100:
+          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but vent is in never_cool list'})
+      print(ctemp*10.0+3,dtemp*10.0)
       if int(ctemp*10.0 + 3) < int(dtemp*10.0):
         if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < 2.0):
           print("Room is less than intake temp - parking instead and relying on fan", ctemp, intake_temp, dtemp - ctemp)
@@ -180,6 +230,14 @@ for room in rooms:
           heating = True
       else:
         print("Skipping heating because ctemp is actually higher than target",ctemp,"vs",dtemp)
+        # if we're closing on target, then we close the vent now.  We undo this if that is no longer met
+        # We do this if the vent is _above_ the target by close_offset - i.e. we dont wabnt it to go _up_
+        # If that temp is _lower_, we want heat
+        print(ctemp*10 - close_offset, dtemp*10)
+        if close_on_target and int(ctemp*10.0 + close_offset) < int(dtemp*10.0):
+          print("Vent is heating, but room is parked - force closing!")
+          if vent.attributes['percent-open'] == 100:
+            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but hit target'})
         parking = True
 
 if direct_vent_control:
