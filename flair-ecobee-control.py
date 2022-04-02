@@ -86,6 +86,9 @@ delta_list = []
 actual_vent_count = 0
 need_force_cool = False
 need_force_heat = False
+total_count = 0
+open_count = 0
+any_manual = False
 for room in rooms:
  if room.attributes['active'] == True:
   print(room.attributes['name'])
@@ -156,6 +159,9 @@ for room in rooms:
     iamintake = False
 
   for vent in room.get_rel('vents'):
+    total_count += 1
+    if vent.attributes['percent-open'] == 100:
+      open_count += 1
     if vent.attributes['inactive']:
       print("dead vebt :(")
       force_park = True
@@ -166,6 +172,7 @@ for room in rooms:
     print(c)
     print(ctemp,dtemp)
     if 'Manual' in c:
+      any_manual = True
       print("Found manual vent in mode",mode,"in state",vent.attributes['percent-open'])
       print("h: at",ctemp*10 - close_offset,"want",dtemp*10)
       print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
@@ -239,6 +246,29 @@ for room in rooms:
           if vent.attributes['percent-open'] == 100:
             vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but hit target'})
         parking = True
+
+min_open = int((total_count * direct_vent_percent) / 100.0)
+print("Total:",total_count,"open:",open_count,"min:",min_open)
+while any_manual and open_count < min_open:
+  print("NEED TO FIX BACKPRESSURE!!!!")
+  best_candidate = None
+  best_diff = 9999
+  best_rool = None
+  for room in rooms:
+    ctemp = room.attributes['current-temperature-c']
+    for vent in room.get_rel('vents'):
+      if vent.attributes['percent-open'] == 0:
+        dtemp = room.attributes['set-point-c']
+        diff = abs(ctemp - dtemp)
+        if diff < best_diff:
+          best_diff = diff
+          best_candidate = vent
+          best_room = room
+  open_count -= 1
+  best_candidate.update(attributes={'percent-open': 100, 'percent-open-reason': 'back pressure protect by JJ!'})
+  print("Force Open:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
+
+
 
 if direct_vent_control:
     # We add this here since this only counts non-flair vents
