@@ -247,7 +247,7 @@ for room in rooms:
             vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but hit target'})
         parking = True
 
-min_open = int((total_count * direct_vent_percent) / 100.0)
+min_open = int(math.ceil((float(total_count) * float(direct_vent_percent)) / 100.0))
 print("Total:",total_count,"open:",open_count,"min:",min_open)
 while any_manual and open_count < min_open:
   print("NEED TO FIX BACKPRESSURE!!!!")
