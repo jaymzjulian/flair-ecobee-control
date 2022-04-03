@@ -86,8 +86,6 @@ delta_list = []
 actual_vent_count = 0
 need_force_cool = False
 need_force_heat = False
-total_count = 0
-open_count = 0
 any_manual = False
 for room in rooms:
  if room.attributes['active'] == True:
@@ -159,9 +157,6 @@ for room in rooms:
     iamintake = False
 
   for vent in room.get_rel('vents'):
-    total_count += 1
-    if vent.attributes['percent-open'] == 100:
-      open_count += 1
     if vent.attributes['inactive']:
       print("dead vebt :(")
       force_park = True
@@ -178,13 +173,13 @@ for room in rooms:
       print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
       # If vent is _above_ the temp by cool offset, we want to start cooling
       # since we want temp to go _down_ - so open the vent
-      if int(ctemp*10.0 + close_offset) > int(dtemp*10.0) and mode == 'cool':
+      if (ctemp*10.0) > (dtemp*10.0 + close_offset) and mode == 'cool':
         print("Vent was closed by us, but should be cooling")
         if vent.attributes['percent-open'] == 0:
           vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is cooling'})
       # If vent is _below_ the temp by heat offset, we want to start heating
       # since we want the temp to go _up_ - so open the vent
-      if int(ctemp*10.0 - close_offset) < int(dtemp*10.0) and mode == 'heat':
+      if (ctemp*10.0) < (dtemp*10.0 - close_offset) and mode == 'heat':
         print("Vent was closed by us, but should be heating")
         if vent.attributes['percent-open'] == 0:
           vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is heating'})
@@ -195,8 +190,7 @@ for room in rooms:
         elif mode == 'heat':
           c = 'Room is heating'
 
-
-    if 'needs cooling' in c or 'is cooling' in c:
+    if 'needs cooling' in c or 'is cooling' in c or ('Protect' in c and mode == 'cool'):
       # We close if we should never cool - we trust, for now, that the flair
       # will open it again.  
       if room.attributes['name'] in never_cool:
@@ -217,12 +211,13 @@ for room in rooms:
         # if we're closing on target, then we close the vent now.  We undo this if that is no longer met
         # We do this if the vent is _above_ the target by close_offset - i.e. dont we want it to 
         # go down.  If that temp is _higher_, then we want cool
-        if close_on_target and int(ctemp*10.0 - close_offset) > int(dtemp*10.0):
-          print("Vent is open, but we hit cool target - force closing")
+        print(ctemp*10, dtemp*10 - close_offset)
+        if close_on_target and (ctemp*10.0) < (dtemp*10.0 - close_offset):
+          print("Vent is open, but we hit cool target,",ctemp,"vs",dtemp,", - force closing")
           if vent.attributes['percent-open'] == 100:
             vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but hit target'})
         parking = True
-    if 'needs heating' in c or 'is heating' in c:
+    if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
       if room.attributes['name'] in never_heat:
         print("Vent is cooling, but room is in never cool list - force closing!")
         if vent.attributes['percent-open'] == 100:
@@ -241,12 +236,19 @@ for room in rooms:
         # We do this if the vent is _above_ the target by close_offset - i.e. we dont wabnt it to go _up_
         # If that temp is _lower_, we want heat
         print(ctemp*10 - close_offset, dtemp*10)
-        if close_on_target and int(ctemp*10.0 + close_offset) < int(dtemp*10.0):
-          print("Vent is heating, but room is parked - force closing!")
+        if close_on_target and (ctemp*10.0) > (dtemp*10.0 + close_offset):
+          print("Vent is open, but we hit heat target,",ctemp,"vs",dtemp,", - force closing")
           if vent.attributes['percent-open'] == 100:
             vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but hit target'})
         parking = True
 
+total_count = 0
+open_count = 0
+for room in rooms:
+  for vent in room.get_rel('vents'):
+    total_count += 1
+    if vent.attributes['percent-open'] == 100:
+      open_count += 1
 min_open = int(math.ceil((float(total_count) * float(direct_vent_percent)) / 100.0))
 print("Total:",total_count,"open:",open_count,"min:",min_open)
 while any_manual and open_count < min_open:
@@ -255,16 +257,22 @@ while any_manual and open_count < min_open:
   best_diff = 9999
   best_rool = None
   for room in rooms:
+    nc = False
+    if room.attributes['name'] in never_bp and mode == 'cool':
+      print("nc:",room.attributes['name'])
+      nc = True
     ctemp = room.attributes['current-temperature-c']
     for vent in room.get_rel('vents'):
       if vent.attributes['percent-open'] == 0:
         dtemp = room.attributes['set-point-c']
         diff = abs(ctemp - dtemp)
-        if diff < best_diff:
+        if room.attributes['active'] == False:
+          diff = 0
+        if diff < best_diff and not nc:
           best_diff = diff
           best_candidate = vent
           best_room = room
-  open_count -= 1
+  open_count += 1
   best_candidate.update(attributes={'percent-open': 100, 'percent-open-reason': 'back pressure protect by JJ!'})
   print("Force Open:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
 
