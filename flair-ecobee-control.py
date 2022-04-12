@@ -87,6 +87,11 @@ actual_vent_count = 0
 need_force_cool = False
 need_force_heat = False
 any_manual = False
+can_use_intake = False
+disable_heat_due_to_overload = False
+celcius_heat_cutoff = max_vent_temp
+if switch_is_f:
+  celcius_heat_cutoff = (celcius_heat_cutoff - 32) * (5.0 / 9.0)
 for room in rooms:
  if room.attributes['active'] == True:
   print(room.attributes['name'])
@@ -164,6 +169,11 @@ for room in rooms:
     else:
       actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
+    vent_reading = vent.get_rel("current-reading")
+    print ("cutoff:",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
+    if vent_reading.attributes['duct-temperature-c'] > celcius_heat_cutoff:
+      print("heat cutoff!",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
+      disable_heat_due_to_overload = True
     print(c)
     print(ctemp,dtemp)
     if 'Manual' in c:
@@ -173,13 +183,13 @@ for room in rooms:
       print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
       # If vent is _above_ the temp by cool offset, we want to start cooling
       # since we want temp to go _down_ - so open the vent
-      if (ctemp*10.0) > (dtemp*10.0 + close_offset) and mode == 'cool':
+      if (ctemp*10.0) > (dtemp*10.0 + close_offset) and mode == 'cool' and (not room.attributes['name'] in never_cool):
         print("Vent was closed by us, but should be cooling")
         if vent.attributes['percent-open'] == 0:
           vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is cooling'})
       # If vent is _below_ the temp by heat offset, we want to start heating
       # since we want the temp to go _up_ - so open the vent
-      if (ctemp*10.0) < (dtemp*10.0 - close_offset) and mode == 'heat':
+      if (ctemp*10.0) < (dtemp*10.0 - close_offset) and mode == 'heat' and (not room.attributes['name'] in never_heat):
         print("Vent was closed by us, but should be heating")
         if vent.attributes['percent-open'] == 0:
           vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is heating'})
@@ -194,17 +204,19 @@ for room in rooms:
       # We close if we should never cool - we trust, for now, that the flair
       # will open it again.  
       if room.attributes['name'] in never_cool:
-        print("Vent is cooling, but room is in never cool list - force closing!")
+        print("Vent is cooling, but room",room.attributes['name'],"is in never cool list - force closing!")
         if vent.attributes['percent-open'] == 100:
           vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but vent is in never_cool list'})
 
       print(ctemp,dtemp)
       if int(ctemp*10.0 - 3) > int(dtemp*10.0):
-        if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > -2.0):
-          print("Room is more than intake temp, give or take - parking instead and relying on fan")
-          parking = True
+        if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > 0-intake_temp_limit):
+          print("Room is more than intake temp, give or take - relying on fan, not even parking")
+          #parking = True
+          can_use_intake = True
         else:
           print("room is cooling")
+          can_use_intake = False
           cooling = True
       else:
         print("Skipping cooling because ctemp is actually lower than target",ctemp,"vs",dtemp)
@@ -219,16 +231,18 @@ for room in rooms:
         parking = True
     if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
       if room.attributes['name'] in never_heat:
-        print("Vent is cooling, but room is in never cool list - force closing!")
+        print("Vent is heating, but room",room.attributes['name'],"is in never heat list - force closing!")
         if vent.attributes['percent-open'] == 100:
-          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but vent is in never_cool list'})
+          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but vent is in never_heat list'})
       print(ctemp*10.0+3,dtemp*10.0)
       if int(ctemp*10.0 + 3) < int(dtemp*10.0):
-        if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < 2.0):
-          print("Room is less than intake temp - parking instead and relying on fan", ctemp, intake_temp, dtemp - ctemp)
-          parking = True
+        if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
+          print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
+          #parking = True
+          can_use_intake = True
         else:
           print("room is heating")
+          can_use_intake = False
           heating = True
       else:
         print("Skipping heating because ctemp is actually higher than target",ctemp,"vs",dtemp)
@@ -249,6 +263,9 @@ for room in rooms:
     total_count += 1
     if vent.attributes['percent-open'] == 100:
       open_count += 1
+direct_vent_percent = direct_vent_percent_cool
+if heating or mode == 'heat':
+  direct_vent_percent = direct_vent_percent_heat
 min_open = int(math.ceil((float(total_count) * float(direct_vent_percent)) / 100.0))
 print("Total:",total_count,"open:",open_count,"min:",min_open)
 while any_manual and open_count < min_open:
@@ -258,7 +275,11 @@ while any_manual and open_count < min_open:
   best_rool = None
   for room in rooms:
     nc = False
-    if room.attributes['name'] in never_bp and mode == 'cool':
+    if room.attributes['name'] in never_heat and mode == 'heat':
+      nc = True
+    if room.attributes['name'] in never_cool and mode == 'cool':
+      nc = True
+    if room.attributes['name'] in never_bp:
       print("nc:",room.attributes['name'])
       nc = True
     ctemp = room.attributes['current-temperature-c']
@@ -312,9 +333,13 @@ if force_park:
   parking = True
   cooling = False
   heating = False
+if disable_heat_due_to_overload:
+  heating = False
+  parking = False
 print("Cooling:",cooling)
 print("Heating:",heating)
 print("parking",parking)
+print("can_use_intake:",can_use_intake)
 print("Delta Temp:",delta, min_delta, max_delta)
 
 if os.path.exists("deltat.txt"):
@@ -376,6 +401,8 @@ if (cooling == False and heating == False) or only_switch_when_complete == False
   cooling = False
   parking = True
 
+
+
 try:
   pyecobee_db = shelve.open('pyecobee_db', protocol=2)
   ecobee_service = pyecobee_db[ecobee_name]
@@ -400,12 +427,15 @@ elif now_utc > ecobee_service.access_token_expires_on:
 ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True))
 #print(ts.pretty_format())
 temp = ts.thermostat_list[0].runtime.actual_temperature
+my_fan = FanMode.AUTO
+if ts.thermostat_list[0].runtime.desired_fan_mode == 'on':
+  my_fan = FanMode.ON
 if cooling:
   max_desired = (temp - cool_offs)
   desired = ts.thermostat_list[0].runtime.desired_cool
   if desired !=  max_desired:
     print("Updating to",max_desired/10)
-    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10), heat_hold_temp=(max_desired / 10) + 6, hold_type=HoldType.INDEFINITE)
+    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10), heat_hold_temp=(max_desired / 10) + 6, hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
     print("Cooling is okay!")
 elif heating:
@@ -413,7 +443,7 @@ elif heating:
   desired = ts.thermostat_list[0].runtime.desired_heat
   if desired != max_desired:
     print("Updating to",max_desired/10,"from",temp)
-    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10)-4, heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE)
+    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10)-4, heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
     print("Heating is okay!")
 elif parking:
@@ -422,12 +452,12 @@ elif parking:
     hvac_mode = 'cool'
   else:
     desired = ts.thermostat_list[0].runtime.desired_heat
-    hvac_mode = 'head'
+    hvac_mode = 'heat'
   max_desired = temp
   print(temp,desired)
   if desired != max_desired:
     print("Updating to",max_desired/10)
-    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10), heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE)
+    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10), heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
     print("parking is okay!")
 
@@ -438,14 +468,44 @@ else:
     hvac_mode = 'cool'
   else:
     desired = ts.thermostat_list[0].runtime.desired_heat
-    hvac_mode = 'head'
+    hvac_mode = 'heat'
   print(temp,desired)
+  print("in disable path temp:",temp,"desired:",desired,hvac_mode)
   # Ensure we're just in range....
-  if temp >= desired and hvac_mode == 'cool':
-      print("Updatring to no cooling/heating")
-      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(temp / 10)+1, heat_hold_temp=(temp / 10) - 1, hold_type=HoldType.INDEFINITE)
+  if temp >= (desired - 9) and hvac_mode == 'cool':
+      print("Updatring to no cooling")
+      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(temp / 10)+1, heat_hold_temp=(temp / 10) - 1, hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   
-  elif temp <= desired and hvac_mode == 'heat':
-      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(temp / 10)+1, heat_hold_temp=(temp / 10) - 1, hold_type=HoldType.INDEFINITE)
+  elif temp <= (desired + 9) and hvac_mode == 'heat':
+      print("Updatring to no heating")
+      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(temp / 10)+1, heat_hold_temp=(temp / 10) - 1, hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
       print("House is okay!")
+ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True))
+print("use_intake:",use_intake_room)
+print("can_use_intake:",can_use_intake)
+print("heat_disabled:",disable_heat_due_to_overload)
+
+if use_intake_room and (not disable_heat_due_to_overload):
+  if can_use_intake:
+    if ts.thermostat_list[0].runtime.desired_fan_mode != 'on':
+      print("Turning on ecobee fan...")
+      print(ts.thermostat_list[0].runtime.desired_cool)
+      print(ts.thermostat_list[0].runtime.desired_heat)
+      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.ON,  hold_type=HoldType.INDEFINITE)
+    else:
+      print("fan is already on")
+  else:
+    if ts.thermostat_list[0].runtime.desired_fan_mode != 'auto':
+      print("Turning off ecobee fan...")
+      update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.AUTO,  hold_type=HoldType.INDEFINITE)
+    else:
+      print("fan is already auto")
+else:
+  print("in non-intake path")
+  if ts.thermostat_list[0].runtime.desired_fan_mode != 'auto' and (not disable_heat_due_to_overload):
+    print("Resetting ecobee fan!")
+    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.AUTO,  hold_type=HoldType.INDEFINITE)
+  elif ts.thermostat_list[0].runtime.desired_fan_mode != 'on' and disable_heat_due_to_overload:
+    print("Turning on ecobee fan during heat overload period...")
+    update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.ON,  hold_type=HoldType.INDEFINITE)
