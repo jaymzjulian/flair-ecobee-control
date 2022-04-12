@@ -103,7 +103,16 @@ force_mode = True
 never_heat = [ 'Cat and duck' ]
 never_cool = [ 'Possum' ]
 # Should we close vents when they hit target?
+# Note this can cause backpressure - see the above settings around backpressure
+# protection!!!!!!!!!
+# specifically:
+# direct_vent_percent_cool and direct_vent_percent_heat
+# are used with this configuration
 # Note this can cause backpressure, but hopefully
 # the flair will do backpressure protext?
 close_on_target = True
+# Offset in tenths of degrees for when we should close the vent
 close_offset = 3
+
+# Heat cutoff for overheating vents!
+max_vent_temp = 110.0
