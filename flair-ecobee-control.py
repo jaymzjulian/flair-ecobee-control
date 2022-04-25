@@ -1,4 +1,5 @@
 from flair_api import make_client
+import time
 import pickle
 import os.path
 import sys
@@ -9,6 +10,16 @@ import pytz
 from six.moves import input
 from pyecobee import *
 import requests
+def set_state(vent, val):
+  global vent_state
+  print("update",vent.attributes['name'],"to",val)
+  vent_state[vent.attributes['name']] = val
+
+def get_state(vent):
+  global vent_state
+  if vent.attributes['name'] in vent_state:
+    return vent_state[vent.attributes['name']] 
+  return vent.attributes['percent-open']
 
 def persist_to_shelf(file_name, ecobee_service):
     pyecobee_db = shelve.open(file_name, protocol=2)
@@ -63,6 +74,7 @@ mode = structures[0].attributes['structure-heat-cool-mode']
 print("Mode is",mode)
 
 rooms = client.get('rooms')
+vent_state = {}
 
 cooling = False
 heating = False
@@ -73,10 +85,9 @@ intake_temp = 999
 # may need it
 if use_intake_room:
   for room in rooms:
-    if room.attributes['active'] == True:
-      if room.attributes['name'] == intake_room:
-        intake_temp = room.attributes['current-temperature-c']
-        print("Found intake room!",intake_temp)
+    if room.attributes['name'] == intake_room:
+      intake_temp = room.attributes['current-temperature-c']
+      print("Found intake room!",intake_temp)
 
 rcount = 0
 force_park = False
@@ -93,6 +104,13 @@ celcius_heat_cutoff = max_vent_temp
 if switch_is_f:
   celcius_heat_cutoff = (celcius_heat_cutoff - 32) * (5.0 / 9.0)
 for room in rooms:
+ if room.attributes['active'] != True:
+  for vent in room.get_rel('vents'):
+    c = vent.attributes['percent-open-reason']
+    if 'Manual' in c:
+      if get_state(vent) == 100:
+        set_state(vent, 0)
+
  if room.attributes['active'] == True:
   print(room.attributes['name'])
   ctemp = room.attributes['current-temperature-c']
@@ -178,23 +196,23 @@ for room in rooms:
     print(ctemp,dtemp)
     if 'Manual' in c:
       any_manual = True
-      print("Found manual vent in mode",mode,"in state",vent.attributes['percent-open'])
+      print("Found manual vent in mode",mode,"in state",get_state(vent))
       print("h: at",ctemp*10 - close_offset,"want",dtemp*10)
       print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
       # If vent is _above_ the temp by cool offset, we want to start cooling
       # since we want temp to go _down_ - so open the vent
       if (ctemp*10.0) > (dtemp*10.0 + close_offset) and mode == 'cool' and (not room.attributes['name'] in never_cool):
         print("Vent was closed by us, but should be cooling")
-        if vent.attributes['percent-open'] == 0:
-          vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is cooling'})
+        if get_state(vent) == 0:
+          set_state(vent, 100)
       # If vent is _below_ the temp by heat offset, we want to start heating
       # since we want the temp to go _up_ - so open the vent
       if (ctemp*10.0) < (dtemp*10.0 - close_offset) and mode == 'heat' and (not room.attributes['name'] in never_heat):
         print("Vent was closed by us, but should be heating")
-        if vent.attributes['percent-open'] == 0:
-          vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'Room is heating'})
+        if get_state(vent) == 0:
+          set_state(vent, 100)
       # If we have a manual open vent, mock the state
-      if vent.attributes['percent-open'] == 100:
+      if get_state(vent) == 100:
         if mode == 'cool':
           c = 'Room is cooling'
         elif mode == 'heat':
@@ -205,11 +223,11 @@ for room in rooms:
       # will open it again.  
       if room.attributes['name'] in never_cool:
         print("Vent is cooling, but room",room.attributes['name'],"is in never cool list - force closing!")
-        if vent.attributes['percent-open'] == 100:
-          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but vent is in never_cool list'})
+        if get_state(vent) == 100:
+          set_state(vent, 0)
 
       print(ctemp,dtemp)
-      if int(ctemp*10.0 - 3) > int(dtemp*10.0):
+      if int(ctemp*10.0) > int(dtemp*10.0):
         if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > 0-intake_temp_limit):
           print("Room is more than intake temp, give or take - relying on fan, not even parking")
           #parking = True
@@ -226,16 +244,16 @@ for room in rooms:
         print(ctemp*10, dtemp*10 - close_offset)
         if close_on_target and (ctemp*10.0) < (dtemp*10.0 - close_offset):
           print("Vent is open, but we hit cool target,",ctemp,"vs",dtemp,", - force closing")
-          if vent.attributes['percent-open'] == 100:
-            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was cool, but hit target'})
+          if get_state(vent) == 100:
+            set_state(vent, 0)
         parking = True
     if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
       if room.attributes['name'] in never_heat:
         print("Vent is heating, but room",room.attributes['name'],"is in never heat list - force closing!")
-        if vent.attributes['percent-open'] == 100:
-          vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but vent is in never_heat list'})
+        if get_state(vent) == 100:
+          set_state(vent, 0)
       print(ctemp*10.0+3,dtemp*10.0)
-      if int(ctemp*10.0 + 3) < int(dtemp*10.0):
+      if int(ctemp*10.0) < int(dtemp*10.0):
         if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
           print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
           #parking = True
@@ -252,8 +270,8 @@ for room in rooms:
         print(ctemp*10 - close_offset, dtemp*10)
         if close_on_target and (ctemp*10.0) > (dtemp*10.0 + close_offset):
           print("Vent is open, but we hit heat target,",ctemp,"vs",dtemp,", - force closing")
-          if vent.attributes['percent-open'] == 100:
-            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'mode was heat, but hit target'})
+          if get_state(vent) == 100:
+            set_state(vent, 0)
         parking = True
 
 total_count = 0
@@ -261,14 +279,14 @@ open_count = 0
 for room in rooms:
   for vent in room.get_rel('vents'):
     total_count += 1
-    if vent.attributes['percent-open'] == 100:
+    if get_state(vent) == 100:
       open_count += 1
 direct_vent_percent = direct_vent_percent_cool
 if heating or mode == 'heat':
   direct_vent_percent = direct_vent_percent_heat
 min_open = int(math.ceil((float(total_count) * float(direct_vent_percent)) / 100.0))
 print("Total:",total_count,"open:",open_count,"min:",min_open)
-while any_manual and open_count < min_open:
+while open_count < min_open:
   print("NEED TO FIX BACKPRESSURE!!!!")
   best_candidate = None
   best_diff = 9999
@@ -284,7 +302,7 @@ while any_manual and open_count < min_open:
       nc = True
     ctemp = room.attributes['current-temperature-c']
     for vent in room.get_rel('vents'):
-      if vent.attributes['percent-open'] == 0:
+      if get_state(vent) == 0:
         dtemp = room.attributes['set-point-c']
         diff = abs(ctemp - dtemp)
         if room.attributes['active'] == False:
@@ -294,7 +312,7 @@ while any_manual and open_count < min_open:
           best_candidate = vent
           best_room = room
   open_count += 1
-  best_candidate.update(attributes={'percent-open': 100, 'percent-open-reason': 'back pressure protect by JJ!'})
+  set_state(best_candidate, 100)
   print("Force Open:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
 
 
@@ -316,13 +334,13 @@ if direct_vent_control:
       temp_delta = d[0]
       for vent in room.get_rel('vents'):
         if open_count < min_open or (temp_delta > 0 and mode == 'cool') or (temp_delta < 0 and mode == 'heat'):
-          if vent.attributes['percent-open'] != 100:
+          if get_state(vent) != 100:
             print("open vent in",room.attributes['name'],"delta is",temp_delta)
-            vent.update(attributes={'percent-open': 100, 'percent-open-reason': 'opening for '+mode+' due to delta '+str(temp_delta)})
+            set_state(vent, 100)
           open_count += 1
         else:
-          if vent.attributes['percent-open'] != 0:
-            vent.update(attributes={'percent-open': 0, 'percent-open-reason': 'closing for '+mode+' due to delta '+str(temp_delta)})
+          if get_state(vent) != 0:
+            set_state(vent, 100)
             print("close vent in",room.attributes['name'],"delta is",temp_delta)
     sys.exit(1)
 
@@ -349,6 +367,13 @@ if os.path.exists("deltat.txt"):
 else:
   last_delta = []
 
+if os.path.exists("last_switch.pic"):
+  r = open("last_switch.pic", "rb")
+  last_switch = pickle.load(r)
+  r.close()
+else:
+  last_switch = time.time()
+
 print(last_delta)
 last_delta.append(delta)
 last_delta = last_delta[-delta_cycles:]
@@ -374,29 +399,53 @@ heat_switch_hit = True
 for d in last_delta:
   if d < cool_switch_threshold:
     cool_switch_hit = False
-  if d > 0-heat_switch_threshold:
-    heat_switch_hit = False
+if d > 0-heat_switch_threshold:
+  heat_switch_hit = False
+
+# this has to be before tge force ones sibce force overrides this
+if (min_heat_time * 69) > (time.time() - last_switch):
+  print("OR Ç1")
+  cool_switch_hit = False
+if (min_cool_time * 69) > (time.time() - last_switch):
+  print("OR Ç2")
+  heat_switch_hit = False
 
 if need_force_cool and (not need_force_heat):
     cool_switch_hit = True
     heat_switch_hit = False
+    print("OR Ç3")
 elif need_force_heat and (not need_force_cool):
     cool_switch_hit = False
     heat_switch_hit = True
+    print("OR Ç4")
 
 print("cs: ",cool_switch_hit)
 print("hs: ",heat_switch_hit)
 
-if (cooling == False and heating == False) or only_switch_when_complete == False:
+if (heat_complete_timeout * 69) < (time.time() - last_switch):
+  print("OR Ç5")
+  only_switch_when_heat_complete = False
+if (cool_complete_timeout * 69) < (time.time() - last_switch):
+  print("OR Ç6")
+  only_switch_when_cool_complete = False
+
+# Logic here:
+# if both cooling and heating are false, it's okay
+# if only_switch_when_complete == False, and mode == heat and only_switch_when_heat_complete == False, it's okay
+# if only_switch_when_complete == False, and mode == cool and only_switch_when_cool_complete == False, it's okay
+# Otherwise, it's not yet okay
+if (cooling == False and heating == False and can_use_intake == False) or (only_switch_when_complete == False and ((mode == 'cool' and only_switch_when_cool_complete == False) or (mode == 'heat' and only_switch_when_heat_complete == False))):
  if cool_switch_hit and (mode == 'heat' or (force_mode == True and mode != 'cool')):
   print("House is heating, but overall delta is",delta,"above target - switching to cooling")
   structures[0].update(attributes={'structure-heat-cool-mode': 'cool'})
+  last_switch = time.time()
   heating = False
   cooling = False
   parking = True
  if heat_switch_hit and (mode == 'cool' or (force_mode == True and mode != 'heat')):
   print("House is cooling, but overall delta is",0-delta,"below target - switching to heating")
   structures[0].update(attributes={'structure-heat-cool-mode': 'heat'})
+  last_switch = time.time()
   heating = False
   cooling = False
   parking = True
@@ -509,3 +558,18 @@ else:
   elif ts.thermostat_list[0].runtime.desired_fan_mode != 'on' and disable_heat_due_to_overload:
     print("Turning on ecobee fan during heat overload period...")
     update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.ON,  hold_type=HoldType.INDEFINITE)
+
+for room in rooms:
+  for vent in room.get_rel('vents'):
+    for ventname in vent_state.keys():
+      if vent.attributes['name'] == ventname:
+        v = vent_state[ventname]
+        if vent.attributes['percent-open'] != v:
+          vent.update(attributes={'percent-open': v})
+
+print("Seconds since last switch:",time.time()-last_switch)
+f = open("last_switch.pic", "wb")
+pickle.dump(last_switch, f)
+f.close()
+
+
