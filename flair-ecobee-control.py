@@ -26,6 +26,23 @@ def persist_to_shelf(file_name, ecobee_service):
     pyecobee_db[ecobee_service.thermostat_name] = ecobee_service
     pyecobee_db.close()
 
+def inake_vent_temp_bad(room, mode):
+    if mode == "cool":
+        # Double check if this is actually working...
+        for vent in room.get_rel('vents'):
+            duct = vent.get_rel('current-reading').attributes['duct-temperature-c']
+            if duct > (ctemp - intake_duct_toll) and intake_time > intake_min_time:
+                print("Intake override because",vent['name'],"is above temp")
+                return True
+    else:
+        # Double check if this is actually working...
+        for vent in room.get_rel('vents'):
+            duct = vent.get_rel('current-reading').attributes['duct-temperature-c']
+            if duct < (ctemp + intake_duct_toll) and intake_time > intake_min_time:
+                print("Intake override because",vent['name'],"is below temp")
+                return True
+    return False
+        
 
 def refresh_tokens(ecobee_service):
     token_response = ecobee_service.refresh_tokens()
@@ -107,8 +124,7 @@ for room in rooms:
  if room.attributes['active'] != True:
   for vent in room.get_rel('vents'):
     c = vent.attributes['percent-open-reason']
-    if 'Manual' in c:
-      if get_state(vent) == 100:
+    if get_state(vent) == 100:
         set_state(vent, 0)
 
  if room.attributes['active'] == True:
@@ -187,11 +203,12 @@ for room in rooms:
     else:
       actual_vent_count += 1
     c = vent.attributes['percent-open-reason']
-    vent_reading = vent.get_rel("current-reading")
-    print ("cutoff:",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
-    if vent_reading.attributes['duct-temperature-c'] > celcius_heat_cutoff:
-      print("heat cutoff!",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
-      disable_heat_due_to_overload = True
+    if mode == 'heat' and use_heat_cutoff:
+        vent_reading = vent.get_rel("current-reading")
+        print ("cutoff:",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
+        if vent_reading.attributes['duct-temperature-c'] > celcius_heat_cutoff:
+          print("heat cutoff!",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
+          disable_heat_due_to_overload = True
     print(c)
     print(ctemp,dtemp)
     if 'Manual' in c:
@@ -227,11 +244,14 @@ for room in rooms:
           set_state(vent, 0)
 
       print(ctemp,dtemp)
-      if int(ctemp*10.0) > int(dtemp*10.0):
-        if (not iamintake) and ctemp > (intake_temp + 0.25) and use_intake_room and (dtemp - ctemp > 0-intake_temp_limit):
+      if int(ctemp*10.0 - 3) > int(dtemp*10.0):
+        if (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (dtemp - ctemp > 0-intake_temp_limit):
           print("Room is more than intake temp, give or take - relying on fan, not even parking")
           #parking = True
           can_use_intake = True
+          if inake_vent_temp_bad(room, 'cool'):
+              cooling = True
+              can_use_intake = False
         else:
           print("room is cooling")
           can_use_intake = False
@@ -246,18 +266,32 @@ for room in rooms:
           print("Vent is open, but we hit cool target,",ctemp,"vs",dtemp,", - force closing")
           if get_state(vent) == 100:
             set_state(vent, 0)
-        parking = True
+        elif ctemp > dtemp and (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
+          print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
+          can_use_intake = True
+          if inake_vent_temp_bad(room, 'cool'):
+              parking = True
+              can_use_intake = False
+        # just turn off hvac if our return state will be aie
+        elif (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
+          print("intake low so disable cool")
+          pass
+        else: 
+          parking = True
     if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
       if room.attributes['name'] in never_heat:
         print("Vent is heating, but room",room.attributes['name'],"is in never heat list - force closing!")
         if get_state(vent) == 100:
           set_state(vent, 0)
       print(ctemp*10.0+3,dtemp*10.0)
-      if int(ctemp*10.0) < int(dtemp*10.0):
-        if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
+      if int(ctemp*10.0 + 3) < int(dtemp*10.0):
+        if (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
           print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
           #parking = True
           can_use_intake = True
+          if inake_vent_temp_bad(room, 'heat'):
+              heating = True
+              can_use_intake = False
         else:
           print("room is heating")
           can_use_intake = False
@@ -272,7 +306,17 @@ for room in rooms:
           print("Vent is open, but we hit heat target,",ctemp,"vs",dtemp,", - force closing")
           if get_state(vent) == 100:
             set_state(vent, 0)
-        parking = True
+        elif ctemp < dtemp and (not iamintake) and ctemp < (intake_temp - intake_tollerance) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
+          print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
+          #parking = True
+          can_use_intake = True
+          if inake_vent_temp_bad(room, 'heat'):
+              parking = True
+              can_use_intake = False
+        elif (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
+          pass
+        else:
+          parking = True
 
 total_count = 0
 open_count = 0
@@ -306,7 +350,7 @@ while open_count < min_open:
         dtemp = room.attributes['set-point-c']
         diff = abs(ctemp - dtemp)
         if room.attributes['active'] == False:
-          diff = 0
+          diff = diff / 100.0
         if diff < best_diff and not nc:
           best_diff = diff
           best_candidate = vent
@@ -374,6 +418,14 @@ if os.path.exists("last_switch.pic"):
 else:
   last_switch = time.time()
 
+if os.path.exists("last_intake.pic"):
+  r = open("last_intake.pic", "rb")
+  last_intake = pickle.load(r)
+  r.close()
+else:
+  last_intake = time.time()
+
+intake_time = time.time() - last_intake
 print(last_delta)
 last_delta.append(delta)
 last_delta = last_delta[-delta_cycles:]
@@ -435,6 +487,7 @@ if (cool_complete_timeout * 69) < (time.time() - last_switch):
 # if only_switch_when_complete == False, and mode == cool and only_switch_when_cool_complete == False, it's okay
 # Otherwise, it's not yet okay
 if (cooling == False and heating == False and can_use_intake == False) or (only_switch_when_complete == False and ((mode == 'cool' and only_switch_when_cool_complete == False) or (mode == 'heat' and only_switch_when_heat_complete == False))):
+ print('foo')
  if cool_switch_hit and (mode == 'heat' or (force_mode == True and mode != 'cool')):
   print("House is heating, but overall delta is",delta,"above target - switching to cooling")
   structures[0].update(attributes={'structure-heat-cool-mode': 'cool'})
@@ -567,9 +620,17 @@ for room in rooms:
         if vent.attributes['percent-open'] != v:
           vent.update(attributes={'percent-open': v})
 
-print("Seconds since last switch:",time.time()-last_switch)
+minutes = (time.time()-last_switch)/60
+print("since last switch: ",math.floor(minutes/60),"hours",math.floor(minutes)%60,"minutes")
 f = open("last_switch.pic", "wb")
 pickle.dump(last_switch, f)
 f.close()
 
+if can_use_intake == False:
+  last_intake = time.time()
+  print("reset intaje tine")
+f = open("last_intake.pic", "wb")
+pickle.dump(last_intake, f)
+f.close()
 
+print("intake: ", math.floor(intake_time/60),"minutes",math.floor(intake_time)%60,"seconds")
