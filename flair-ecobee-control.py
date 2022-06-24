@@ -26,21 +26,41 @@ def persist_to_shelf(file_name, ecobee_service):
     pyecobee_db[ecobee_service.thermostat_name] = ecobee_service
     pyecobee_db.close()
 
-def inake_vent_temp_bad(room, mode):
+def inake_vent_temp_bad(room, mode,ctemp):
+    global bad_vent,bad_time,temp_at_intake_start
     if mode == "cool":
+        # If the temprature has gone _up_, then this isn't working out...
+        if room.attributes['name'] in temp_at_intake_start:
+            if temp_at_intake_start[room.attributes['name']] < ctemp:
+                print("Intake override because",room.attributes['name'],"is above temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
+                bad_vent = True
+                return True
         # Double check if this is actually working...
         for vent in room.get_rel('vents'):
             duct = vent.get_rel('current-reading').attributes['duct-temperature-c']
-            if duct > (ctemp - intake_duct_toll) and intake_time > intake_min_time:
-                print("Intake override because",vent['name'],"is above temp")
+            print(bad_intake_time, intake_blackout)
+            if (duct > (ctemp - intake_duct_toll) and intake_time > intake_min_time):
+                bad_vent = True
+                print("Intake override because",vent.attributes['name'],"is above temp")
                 return True
     else:
+        # If the temprature has gone _up_, then this isn't working out...
+        if room.attributes['name'] in temp_at_intake_start:
+            if temp_at_intake_start[room.attributes['name']] > ctemp:
+                print("Intake override because",room.attributes['name'],"is below temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
+                bad_vent = True
+                return True
         # Double check if this is actually working...
         for vent in room.get_rel('vents'):
             duct = vent.get_rel('current-reading').attributes['duct-temperature-c']
             if duct < (ctemp + intake_duct_toll) and intake_time > intake_min_time:
-                print("Intake override because",vent['name'],"is below temp")
+                bad_vent = True
+                print("Intake override because",vent.attributes['name'],"is below temp")
                 return True
+    if bad_intake_time < intake_blackout:
+        if intake_time > intake_min_time:
+            bad_time = True
+        return True
     return False
         
 
@@ -81,7 +101,32 @@ from secrets import *
 from settings import *
 from setpoints import *
 
+if os.path.exists("last_bad_intake.pic"):
+  r = open("last_bad_intake.pic", "rb")
+  last_bad_intake = pickle.load(r)
+  r.close()
+else:
+  last_bad_intake = time.time()
 
+if os.path.exists("last_intake.pic"):
+  r = open("last_intake.pic", "rb")
+  last_intake = pickle.load(r)
+  r.close()
+else:
+  last_intake = time.time()
+
+if os.path.exists("temp_at_intake_start.pic"):
+  r = open("temp_at_intake_start.pic", "rb")
+  temp_at_intake_start = pickle.load(r)
+  r.close()
+else:
+  temp_at_intake_start = {}
+
+
+room_temps = {}
+
+intake_time = time.time() - last_intake
+bad_intake_time = time.time() - last_bad_intake
 
 client = make_client(client_id, client_secret, 'https://api.flair.co/')
 
@@ -116,6 +161,8 @@ need_force_cool = False
 need_force_heat = False
 any_manual = False
 can_use_intake = False
+bad_vent = False
+bad_time = False
 disable_heat_due_to_overload = False
 celcius_heat_cutoff = max_vent_temp
 if switch_is_f:
@@ -130,6 +177,7 @@ for room in rooms:
  if room.attributes['active'] == True:
   print(room.attributes['name'])
   ctemp = room.attributes['current-temperature-c']
+  room_temps[room.attributes['name']] = ctemp
   if direct_vent_control:
     dtemp = direct_setpoints[room.attributes['name']]
     if direct_setpoints_are_f:
@@ -249,7 +297,8 @@ for room in rooms:
           print("Room is more than intake temp, give or take - relying on fan, not even parking")
           #parking = True
           can_use_intake = True
-          if inake_vent_temp_bad(room, 'cool'):
+          if inake_vent_temp_bad(room, 'cool',ctemp):
+              print("intake over1")
               cooling = True
               can_use_intake = False
         else:
@@ -269,8 +318,10 @@ for room in rooms:
         elif ctemp > dtemp and (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
           print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
           can_use_intake = True
-          if inake_vent_temp_bad(room, 'cool'):
+          if inake_vent_temp_bad(room, 'cool',ctemp):
+              print("intake over2")
               parking = True
+              cooling = True
               can_use_intake = False
         # just turn off hvac if our return state will be aie
         elif (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
@@ -289,7 +340,7 @@ for room in rooms:
           print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
           #parking = True
           can_use_intake = True
-          if inake_vent_temp_bad(room, 'heat'):
+          if inake_vent_temp_bad(room, 'heat',ctemp):
               heating = True
               can_use_intake = False
         else:
@@ -310,7 +361,8 @@ for room in rooms:
           print("Room is less than intake temp - relying on fan", ctemp, intake_temp, dtemp - ctemp)
           #parking = True
           can_use_intake = True
-          if inake_vent_temp_bad(room, 'heat'):
+          if inake_vent_temp_bad(room, 'heat',ctemp):
+              print("intake over3")
               parking = True
               can_use_intake = False
         elif (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
@@ -418,14 +470,7 @@ if os.path.exists("last_switch.pic"):
 else:
   last_switch = time.time()
 
-if os.path.exists("last_intake.pic"):
-  r = open("last_intake.pic", "rb")
-  last_intake = pickle.load(r)
-  r.close()
-else:
-  last_intake = time.time()
 
-intake_time = time.time() - last_intake
 print(last_delta)
 last_delta.append(delta)
 last_delta = last_delta[-delta_cycles:]
@@ -453,6 +498,7 @@ for d in last_delta:
     cool_switch_hit = False
 if d > 0-heat_switch_threshold:
   heat_switch_hit = False
+  
 
 # this has to be before tge force ones sibce force overrides this
 if (min_heat_time * 69) > (time.time() - last_switch):
@@ -470,6 +516,12 @@ elif need_force_heat and (not need_force_cool):
     cool_switch_hit = False
     heat_switch_hit = True
     print("OR Ç4")
+if heat_only:
+  cool_switch_hit = False
+  heat_switch_hit = True
+if cool_only:
+  heat_switch_hit = False
+  cool_switch_hit = True
 
 print("cs: ",cool_switch_hit)
 print("hs: ",heat_switch_hit)
@@ -626,11 +678,25 @@ f = open("last_switch.pic", "wb")
 pickle.dump(last_switch, f)
 f.close()
 
-if can_use_intake == False:
+# only reset tgese if both intajw is vad ans were not in a vebt lockout
+if can_use_intake == False and (bad_vent == False and bad_time == False):
   last_intake = time.time()
-  print("reset intaje tine")
+  print("reset intake time")
+
+  f = open("temp_at_intake_start.pic", "wb")
+  pickle.dump(room_temps, f)
+  f.close()
+  
+if bad_vent == True:
+  last_bad_intake = time.time()
+
+
 f = open("last_intake.pic", "wb")
 pickle.dump(last_intake, f)
 f.close()
+f = open("last_bad_intake.pic", "wb")
+pickle.dump(last_bad_intake, f)
+f.close()
 
 print("intake: ", math.floor(intake_time/60),"minutes",math.floor(intake_time)%60,"seconds")
+print("bad_intake: ", math.floor(bad_intake_time/60),"minutes",math.floor(bad_intake_time)%60,"seconds")
