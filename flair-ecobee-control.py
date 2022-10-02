@@ -31,7 +31,7 @@ def inake_vent_temp_bad(room, mode,ctemp):
     if mode == "cool":
         # If the temprature has gone _up_, then this isn't working out...
         if room.attributes['name'] in temp_at_intake_start:
-            if temp_at_intake_start[room.attributes['name']] < ctemp:
+            if temp_at_intake_start[room.attributes['name']] < (ctemp-1.0):
                 print("Intake override because",room.attributes['name'],"is above temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
                 bad_vent = True
                 return True
@@ -46,7 +46,7 @@ def inake_vent_temp_bad(room, mode,ctemp):
     else:
         # If the temprature has gone _up_, then this isn't working out...
         if room.attributes['name'] in temp_at_intake_start:
-            if temp_at_intake_start[room.attributes['name']] > ctemp:
+            if temp_at_intake_start[room.attributes['name']] > (ctemp+1.0):
                 print("Intake override because",room.attributes['name'],"is below temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
                 bad_vent = True
                 return True
@@ -59,6 +59,7 @@ def inake_vent_temp_bad(room, mode,ctemp):
                 return True
     if bad_intake_time < intake_blackout:
         if intake_time > intake_min_time:
+            print("intake override due to blackout time - time remaining",intake_blackout - bad_intake_time)
             bad_time = True
         return True
     return False
@@ -327,8 +328,10 @@ for room in rooms:
         elif (not iamintake) and ctemp > (intake_temp + intake_tollerance) and use_intake_room and (abs(dtemp - ctemp) < intake_temp_limit):
           print("intake low so disable cool")
           pass
-        else: 
-          parking = True
+        # Otherwise, we're not cooling, so lets not cool
+        #else: 
+        #  print("parking1")
+        #  parking = True
     if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
       if room.attributes['name'] in never_heat:
         print("Vent is heating, but room",room.attributes['name'],"is in never heat list - force closing!")
@@ -367,8 +370,9 @@ for room in rooms:
               can_use_intake = False
         elif (not iamintake) and ctemp < (intake_temp - 0.5) and use_intake_room and (dtemp - ctemp < intake_temp_limit):
           pass
-        else:
-          parking = True
+        #else:
+        #  print("parking2")
+        #  parking = True
 
 total_count = 0
 open_count = 0
@@ -411,6 +415,31 @@ while open_count < min_open:
   set_state(best_candidate, 100)
   print("Force Open:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
 
+# if we've got max cool, close vents on best rooms
+if mode == 'cool':
+  while open_count > max_cool_vents:
+    best_candidate = None
+    best_diff = 999
+    best_rool = None
+    for room in rooms:
+        ctemp = room.attributes['current-temperature-c']
+        for vent in room.get_rel('vents'):
+            if get_state(vent) == 100:
+              dtemp = room.attributes['set-point-c']
+              # This is not abs, because if it is _colder_, we want it to never open, if it at all makes
+              # sense....
+              diff = ctemp - dtemp
+              if diff < 0:
+                  diff = 999 - diff
+              if room.attributes['active'] == False:
+                diff = 999
+              if diff < best_diff:
+                best_diff = diff
+                best_candidate = vent
+                best_room = room
+    open_count -= 1
+    set_state(best_candidate, 0)
+    print("Force close:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
 
 
 if direct_vent_control:
@@ -526,10 +555,10 @@ if cool_only:
 print("cs: ",cool_switch_hit)
 print("hs: ",heat_switch_hit)
 
-if (heat_complete_timeout * 69) < (time.time() - last_switch):
+if (heat_complete_timeout * 60) < (time.time() - last_switch):
   print("OR Ç5")
   only_switch_when_heat_complete = False
-if (cool_complete_timeout * 69) < (time.time() - last_switch):
+if (cool_complete_timeout * 60) < (time.time() - last_switch):
   print("OR Ç6")
   only_switch_when_cool_complete = False
 
@@ -639,13 +668,13 @@ ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.R
 print("use_intake:",use_intake_room)
 print("can_use_intake:",can_use_intake)
 print("heat_disabled:",disable_heat_due_to_overload)
+print(ts.thermostat_list[0].runtime.desired_cool)
+print(ts.thermostat_list[0].runtime.desired_heat)
 
 if use_intake_room and (not disable_heat_due_to_overload):
   if can_use_intake:
     if ts.thermostat_list[0].runtime.desired_fan_mode != 'on':
       print("Turning on ecobee fan...")
-      print(ts.thermostat_list[0].runtime.desired_cool)
-      print(ts.thermostat_list[0].runtime.desired_heat)
       update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.ON,  hold_type=HoldType.INDEFINITE)
     else:
       print("fan is already on")
@@ -683,12 +712,15 @@ if can_use_intake == False and (bad_vent == False and bad_time == False):
   last_intake = time.time()
   print("reset intake time")
 
+if bad_vent == True:
+  last_bad_intake = time.time()
+
+# Any time we're not using the intake, reset this - this ensures that if we only had a problemf or a while,
+# we'll reset out of it
+if can_use_intake == False:
   f = open("temp_at_intake_start.pic", "wb")
   pickle.dump(room_temps, f)
   f.close()
-  
-if bad_vent == True:
-  last_bad_intake = time.time()
 
 
 f = open("last_intake.pic", "wb")

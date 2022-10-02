@@ -4,6 +4,14 @@ cool_offs = 20
 # What the add to the current temp when forcing the ecobee to heat
 heat_offs = 20
 
+# The flair only lets you set one temprature.  This adjusts
+# that for heat/cool modes so you can have an offset between them...
+#
+# To match the ecobee default setting of +-2 degrees, set each of these
+# to 20 here
+cool_mode_temp_adjust = 20
+heat_mode_temp_adjust = 20
+
 # Delta multiplier for heat/cool adjustments to the ecobee - 5 is literally half the number of degrees, 10 is exactly the number
 # 5 works well for me - 10 overshoots and causes heat/cool cycles.
 cool_system_delta = 5
