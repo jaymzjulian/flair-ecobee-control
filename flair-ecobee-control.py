@@ -10,6 +10,20 @@ import pytz
 from six.moves import input
 from pyecobee import *
 import requests
+
+def dtemp_adj(mode, dtemp):
+  if mode == 'cool':
+    if switch_is_f:
+      dtemp += ((cool_mode_temp_adjust/10.0) * (5.0/9.0))
+    else:
+      dtemp += cool_mode_temp_adjust/10.0
+  else:
+    if switch_is_f:
+      dtemp -= ((heat_mode_temp_adjust/10.0) * (5.0/9.0))
+    else:
+      dtemp -= heat_mode_temp_adjust/10.0
+  return dtemp 
+
 def set_state(vent, val):
   global vent_state
   print("update",vent.attributes['name'],"to",val)
@@ -179,6 +193,9 @@ for room in rooms:
   print(room.attributes['name'])
   ctemp = room.attributes['current-temperature-c']
   room_temps[room.attributes['name']] = ctemp
+  # We don't adjust dtemp here _yet_, because we're first working
+  # out offsets, and THEN we are adjusting the dtemp to match our
+  # offsets defined in settings - see explanation below...
   if direct_vent_control:
     dtemp = direct_setpoints[room.attributes['name']]
     if direct_setpoints_are_f:
@@ -186,16 +203,37 @@ for room in rooms:
   else:
     dtemp = room.attributes['set-point-c']
 
+  # We're setting the delta _before_ we do the 
+  # temprature adjust, since we want to know how far
+  # from the _other mode_ target we are....
+  #
+  # So we end up doing the measuring from the _opposite_ of our mode -
+  # so if we're in cool, delta for the measuring is measured from the heat
+  # point - so if we ever get out of range by more than the heat/cool diffpoint,
+  # then we switch - this ensures that everyone tries to stay _in range_, rather than
+  # a hard split.... this way if we have heat/cool switch of +- 2 degrees, and
+  # target is 70:
+  # in cool mode, we switch to heat if below (68-2)-2) = 64
+  # in heat mode, we switch to cool if above (68+2)+2) = 72
+  # and then attept to hit 66 on heat, and 70 on cool in that case...
+  if mode == 'cool':
+    delta_adj = 0 - heat_mode_temp_adjust / 10.0
+  else:
+    delta_adj = cool_mode_temp_adjust / 10.0
+
   # Simplied C to F, since flair always repots in C
   if switch_is_f:
-    n_delta = (ctemp - dtemp) * (9.0/5.0)
+    n_delta = (ctemp - (dtemp+delta_adj)) * (9.0/5.0)
   else:
-    n_delta = (ctemp - dtemp)
+    n_delta = (ctemp - (dtemp + delta_adj))
+  print("ctemp:",ctemp,"dtemp:",dtemp,"delta_adj:",delta_adj,"mode:",mode, "n_delta",n_delta)
 
   if room.attributes['name'] in never_cool and n_delta > 0:
     n_delta = 0
   if room.attributes['name'] in never_heat and n_delta < 0:
     n_delta = 0
+
+  # From here on out, we're wokring on _adjusted_ delta temps
   
   # If we're always applying the multiplier, do it before min/max
   # delta, since that is what actually controlls the thermostat
@@ -258,8 +296,15 @@ for room in rooms:
         if vent_reading.attributes['duct-temperature-c'] > celcius_heat_cutoff:
           print("heat cutoff!",vent_reading.attributes['duct-temperature-c'],celcius_heat_cutoff)
           disable_heat_due_to_overload = True
+
     print(c)
     print(ctemp,dtemp)
+
+    # If we got here, then we want to adjust dtemp to make our actual _target_ - in cool
+    # mode, this is temp + cool offset - i.e. if it's 68, and we have a cool offset of
+    # 2 it'll be 70
+    dtemp = dtemp_adj(mode, dtemp)
+
     if 'Manual' in c:
       any_manual = True
       print("Found manual vent in mode",mode,"in state",get_state(vent))
@@ -404,6 +449,7 @@ while open_count < min_open:
     for vent in room.get_rel('vents'):
       if get_state(vent) == 0:
         dtemp = room.attributes['set-point-c']
+        dtemp = dtemp_adj(mode, dtemp)
         diff = abs(ctemp - dtemp)
         if room.attributes['active'] == False:
           diff = diff / 100.0
@@ -426,6 +472,7 @@ if mode == 'cool':
         for vent in room.get_rel('vents'):
             if get_state(vent) == 100:
               dtemp = room.attributes['set-point-c']
+              dtemp = dtemp_adj(mode, dtemp)
               # This is not abs, because if it is _colder_, we want it to never open, if it at all makes
               # sense....
               diff = ctemp - dtemp
