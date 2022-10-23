@@ -1,3 +1,7 @@
+# heat/cool disable
+heat_only = False
+cool_only = False
+
 # For all ecobee settings, they're multiplied by 10 for degrees - so cool_offs of 20 means "use 2 degrees"
 # What the subtract from the current temp when forcing the ecobee to cool
 cool_offs = 20
@@ -22,6 +26,9 @@ heat_system_delta = 5
 # The meaning of this and heat_switch_thresholf are affected by the 
 # settings below (switch_is_f, delta_is_average, delta_is_max) and excludes rooms in
 # the list no_mode_room
+#
+# Note that all comparisons are from the inflection point - so for example,
+# if temp is 70, and it's configured for +-2 deg, +# heat switch threashold will be measured from 68, and cool will be measured from 72
 cool_switch_threshold = 3.0
 # Switch to cool if we _ever_ excceed this, ignoring the 
 # heat switch
@@ -89,6 +96,12 @@ min_cool_time = 0
 min_heat_time = 0
 cool_complete_timeout = 120
 heat_complete_timeout = 120
+
+# Maximum number of vents to open when cooling - beyond this, it'll close vents 
+# to concentrate cooling to the warmest rooms
+# 
+# This deals with efficiency issues with my AC unit :)
+max_cool_vents = 4
 
 # Bypass flair's automatic vent control, and control them manually?
 # Note that this will bypass all of the safetys in the flair system, and you
