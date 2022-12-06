@@ -227,7 +227,6 @@ for room in rooms:
 
   # Simplied C to F, since flair always repots in C
   if switch_is_f:
-    # the cool_delta_etc are in f
     c_n_delta = (ctemp - dtemp) * (9.0/5.0) - cool_delta_adj
     h_n_delta = (ctemp - dtemp) * (9.0/5.0) + heat_delta_adj
   else:
@@ -308,7 +307,7 @@ for room in rooms:
   for vent in room.get_rel('vents'):
     if vent.attributes['inactive']:
       print("dead vebt :(")
-      force_park = True
+      #force_park = True
       #sys.exit(1)
     else:
       actual_vent_count += 1
@@ -328,7 +327,7 @@ for room in rooms:
     # 2 it'll be 70
     dtemp = dtemp_adj(mode, dtemp)
 
-    if 'Manual' in c:
+    if c!=None and 'Manual' in c:
       any_manual = True
       print("Found manual vent in mode",mode,"in state",get_state(vent))
       print("h: at",ctemp*10 - close_offset,"want",dtemp*10)
@@ -356,7 +355,7 @@ for room in rooms:
     intake_calc_ctemp[room.attributes['name']] = ctemp
     intake_calc_dtemp[room.attributes['name']] = dtemp
 
-    if 'needs cooling' in c or 'is cooling' in c or ('Protect' in c and mode == 'cool'):
+    if c!=None and ('needs cooling' in c or 'is cooling' in c or ('Protect' in c and mode == 'cool')):
       # We close if we should never cool - we trust, for now, that the flair
       # will open it again.  
       if room.attributes['name'] in never_cool:
@@ -404,7 +403,7 @@ for room in rooms:
         #else: 
         #  print("parking1")
         #  parking = True
-    if 'needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat'):
+    if c!=None and ('needs heating' in c or 'is heating' in c or ('Protect' in c and mode == 'heat')):
       if room.attributes['name'] in never_heat:
         print("Vent is heating, but room",room.attributes['name'],"is in never heat list - force closing!")
         if get_state(vent) == 100:
@@ -478,6 +477,8 @@ while open_count < min_open:
       if get_state(vent) == 0:
         dtemp = room.attributes['set-point-c']
         dtemp = dtemp_adj(mode, dtemp)
+        if ctemp == None:
+          ctemp = dtemp
         diff = abs(ctemp - dtemp)
         if room.attributes['active'] == False:
           diff = diff / 100.0
@@ -678,22 +679,25 @@ if (cooling == False and heating == False and can_use_intake == False) or (only_
 intake_would_be_good = True
 highest_intake_diff = 0
 for room in rooms:
+  name = room.attributes['name']
+  if name in linked_to_intake:
+    print("Skipping",name)
+    continue
   for vent in room.get_rel('vents'):
     if get_state(vent) == 100:
       # Would running the fan bring us _towards_ our destination temprature?  This is _indenpendant_ of
       # our current heat/cool mode - it's entirely around "would it make it closer".  So if a room is overheated,
       # this will bring it down _without_ switching to cool, for example...
-      name = room.attributes['name']
       if name in intake_calc_ctemp:
         print("room",name,intake_temp,"curr:",intake_calc_ctemp[name], "dest:",intake_calc_dtemp[name])
         ctemp = intake_calc_ctemp[name]
         dtemp = intake_calc_dtemp[name]
         # if intake temp is above both ctemp and dtemp, it is bad
-        if intake_temp > ctemp and intake_temp > dtemp:
+        if intake_temp > ctemp and intake_temp > dtemp and dtemp < ctemp:
           print("bad because intake temp above _both_ ctemp and dtemp")
           intake_would_be_good = False 
         # if intake is below both ctemp _and_ dtemp, then it would also be bad
-        if intake_temp < ctemp and intake_temp < dtemp:
+        if intake_temp < ctemp and intake_temp < dtemp and dtemp > ctemp:
           print("bad because intake temp above _both_ ctemp and dtemp")
           intake_would_be_good = False 
         # if intake temp is above ctemp, but below dtemp, then it would
@@ -717,13 +721,14 @@ if highest_intake_diff < 0.5:
 #
 # using *5 ibsyead if *10 here to dampen
 max_c_delta *= cool_system_delta
-max_h_delta *= heat_system_delta
+min_h_delta *= heat_system_delta
 if cool_offs > max_c_delta:
   cool_offs = max_c_delta 
-if heat_offs > max_h_delta:
-  heat_offs = max_h_delta
+if heat_offs > 0-min_h_delta:
+  heat_offs = 0-min_h_delta
 print(cool_offs, heat_offs, min_h_delta, max_h_delta)
 
+#sys.exit(0)
 
 try:
   pyecobee_db = shelve.open('pyecobee_db', protocol=2)

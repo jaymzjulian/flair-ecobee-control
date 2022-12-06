@@ -164,3 +164,8 @@ close_offset = 2
 #max_vent_temp = 90.0
 max_vent_temp = 130.0
 use_heat_cutoff = False
+
+# Rooms which are physically connected to the intake room, and
+# hence should NOT be used in the heuristic of whether to run the intake fan
+# or not...
+linked_to_intake = []
