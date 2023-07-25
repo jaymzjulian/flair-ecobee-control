@@ -26,8 +26,11 @@ def dtemp_adj(mode, dtemp):
 
 def set_state(vent, val):
   global vent_state
-  print("update",vent.attributes['name'],"to",val)
-  vent_state[vent.attributes['name']] = val
+  try:
+    print("update",vent.attributes['name'],"to",val)
+    vent_state[vent.attributes['name']] = val
+  except:
+    print("BAd")
 
 def get_state(vent):
   global vent_state
@@ -45,7 +48,7 @@ def inake_vent_temp_bad(room, mode,ctemp):
     if mode == "cool":
         # If the temprature has gone _up_, then this isn't working out...
         if room.attributes['name'] in temp_at_intake_start:
-            if temp_at_intake_start[room.attributes['name']] < (ctemp-1.0):
+            if temp_at_intake_start[room.attributes['name']] < (ctemp-0.5):
                 print("Intake override because",room.attributes['name'],"is above temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
                 bad_vent = True
                 return True
@@ -58,9 +61,9 @@ def inake_vent_temp_bad(room, mode,ctemp):
                 print("Intake override because",vent.attributes['name'],"is above temp")
                 return True
     else:
-        # If the temprature has gone _up_, then this isn't working out...
+        # If the temprature has gone _down_, then this isn't working out...
         if room.attributes['name'] in temp_at_intake_start:
-            if temp_at_intake_start[room.attributes['name']] > (ctemp+1.0):
+            if temp_at_intake_start[room.attributes['name']] > (ctemp+0.5):
                 print("Intake override because",room.attributes['name'],"is below temp when the intake started",temp_at_intake_start[room.attributes['name']],"initial vs ",ctemp,"now")
                 bad_vent = True
                 return True
@@ -116,6 +119,12 @@ from secrets import *
 from settings import *
 from setpoints import *
 
+if os.path.exists("mods_by_us.pic"):
+  r = open("mods_by_us.pic", "rb")
+  mods_by_us = pickle.load(r)
+  r.close()
+else:
+  mods_by_us = {}
 if os.path.exists("last_bad_intake.pic"):
   r = open("last_bad_intake.pic", "rb")
   last_bad_intake = pickle.load(r)
@@ -325,22 +334,24 @@ for room in rooms:
     # If we got here, then we want to adjust dtemp to make our actual _target_ - in cool
     # mode, this is temp + cool offset - i.e. if it's 68, and we have a cool offset of
     # 2 it'll be 70
+    dtemp = room.attributes['set-point-c']
     dtemp = dtemp_adj(mode, dtemp)
 
     if c!=None and 'Manual' in c:
+      
       any_manual = True
       print("Found manual vent in mode",mode,"in state",get_state(vent))
       print("h: at",ctemp*10 - close_offset,"want",dtemp*10)
       print("c: at",ctemp*10 + close_offset,"want",dtemp*10)
       # If vent is _above_ the temp by cool offset, we want to start cooling
       # since we want temp to go _down_ - so open the vent
-      if (ctemp*10.0) > (dtemp*10.0 + close_offset) and mode == 'cool' and (not room.attributes['name'] in never_cool):
+      if (ctemp*10.0) > (dtemp*10.0 - close_offset) and mode == 'cool' and (not room.attributes['name'] in never_cool):
         print("Vent was closed by us, but should be cooling")
         if get_state(vent) == 0:
           set_state(vent, 100)
       # If vent is _below_ the temp by heat offset, we want to start heating
       # since we want the temp to go _up_ - so open the vent
-      if (ctemp*10.0) < (dtemp*10.0 - close_offset) and mode == 'heat' and (not room.attributes['name'] in never_heat):
+      if (ctemp*10.0) < (dtemp*10.0 + close_offset) and mode == 'heat' and (not room.attributes['name'] in never_heat):
         print("Vent was closed by us, but should be heating")
         if get_state(vent) == 0:
           set_state(vent, 100)
@@ -472,10 +483,19 @@ while open_count < min_open:
     if room.attributes['name'] in never_bp:
       print("nc:",room.attributes['name'])
       nc = True
+    if mode == 'heat' and room.attributes['name'] in never_bp_heat:
+      print("heat nc:",room.attributes['name'])
+      nc = True
+    if mode == 'cool' and room.attributes['name'] in never_bp_cool:
+      print("cool nc:",room.attributes['name'])
+      nc = True
     ctemp = room.attributes['current-temperature-c']
     for vent in room.get_rel('vents'):
       if get_state(vent) == 0:
         dtemp = room.attributes['set-point-c']
+        # If we're away, AND we know what the temp _was_, deal with that here
+        if room.attributes['active'] == False and room.attributes['name'] in mods_by_us:
+          dtemp = mods_by_us[room.attributes['name']]['Temp']
         dtemp = dtemp_adj(mode, dtemp)
         if ctemp == None:
           ctemp = dtemp
@@ -491,32 +511,46 @@ while open_count < min_open:
   print("Force Open:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
 
 # if we've got max cool, close vents on best rooms
+print(mode)
 if mode == 'cool':
+  print(open_count, max_cool_vents)
   while open_count > max_cool_vents:
     best_candidate = None
+    bcbl = None
     best_diff = 999
     best_rool = None
     for room in rooms:
         ctemp = room.attributes['current-temperature-c']
         for vent in room.get_rel('vents'):
-            if get_state(vent) == 100:
+            skip = False
+            try:
+              if vent == bcbl:
+                skip = True
+            except:
+              pass
+            if skip == False and get_state(vent) == 100:
               dtemp = room.attributes['set-point-c']
               dtemp = dtemp_adj(mode, dtemp)
               # This is not abs, because if it is _colder_, we want it to never open, if it at all makes
               # sense....
               diff = ctemp - dtemp
-              if diff < 0:
-                  diff = 999 - diff
+              if room.attributes['name'] in pressure_room_multiplier:
+                diff *= pressure_room_multiplier[room.attributes['name']]
               if room.attributes['active'] == False:
-                diff = 999
+                diff = 0-999
               if diff < best_diff:
                 best_diff = diff
                 best_candidate = vent
                 best_room = room
     open_count -= 1
-    set_state(best_candidate, 0)
-    print("Force close:",best_candidate.attributes['name'],best_diff,best_room.attributes['name'])
-
+    print("best candidate:", best_candidate)
+    if True:
+      try:
+        set_state(best_candidate, 0)
+        print("Force close:",best_candidate.attributes['name'],best_diff,best_room.attributes['name']) 
+      except:
+        print("Exception closing vent",best_candidate)
+        bcbl = best_candidate
 
 if direct_vent_control:
     # We add this here since this only counts non-flair vents
@@ -751,7 +785,7 @@ elif now_utc > ecobee_service.access_token_expires_on:
 	token_response = refresh_tokens(ecobee_service)
   
 
-ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True))
+ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True, include_sensors=True))
 #print(ts.pretty_format())
 temp = ts.thermostat_list[0].runtime.actual_temperature
 my_fan = FanMode.AUTO
@@ -809,7 +843,7 @@ else:
       update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(temp / 10)+1, heat_hold_temp=(temp / 10) - 1, hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
       print("House is okay!")
-ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True))
+ts = ecobee_service.request_thermostats(Selection(selection_type=SelectionType.REGISTERED.value, selection_match='', include_runtime=True, include_settings=True, include_sensors = True))
 print("use_intake:",use_intake_room)
 print("can_use_intake:",can_use_intake)
 print("heat_disabled:",disable_heat_due_to_overload)
@@ -840,10 +874,12 @@ else:
 
 for room in rooms:
   for vent in room.get_rel('vents'):
+    print("Update vents for",room.attributes['name'])
     for ventname in vent_state.keys():
       if vent.attributes['name'] == ventname:
         v = vent_state[ventname]
         if vent.attributes['percent-open'] != v:
+          print("Updating",ventname)
           vent.update(attributes={'percent-open': v})
 
 minutes = (time.time()-last_switch)/60
@@ -853,6 +889,7 @@ pickle.dump(last_switch, f)
 f.close()
 
 # only reset tgese if both intajw is vad ans were not in a vebt lockout
+print("CANINTAKE:",can_use_intake,"BADVENT",bad_vent,"BADTIME",bad_time)
 if can_use_intake == False and (bad_vent == False and bad_time == False):
   last_intake = time.time()
   print("reset intake time")
@@ -877,3 +914,82 @@ f.close()
 
 print("intake: ", math.floor(intake_time/60),"minutes",math.floor(intake_time)%60,"seconds")
 print("bad_intake: ", math.floor(bad_intake_time/60),"minutes",math.floor(bad_intake_time)%60,"seconds")
+
+
+# Finally, deal with auto-away - honsetly, this should move to the top of the system, BUT for now this will
+# do - yes, there will be a minute or two of lag, but that's somewhat okay... we'll refactor it to the top 
+# later, but I want this to exist now!
+
+all_states = {
+}
+
+for s in ts.thermostat_list[0].remote_sensors:
+  for c in s.capability:
+    if c.type == 'occupancy':
+      all_states[s.name] = c.value
+
+
+
+print(mods_by_us)
+
+# Auto away logic
+pet_max = (80.0-32.0) * (5.0/9.0)
+pet_min = (50.0-32.0) * (5.0/9.0)
+for r in rooms:
+  room_name = r.attributes['name']
+  if not room_name in mods_by_us:
+    mods_by_us[room_name] = { 'State': True, 'When': time.time(), 'LastSeen': time.time(), 'Temp': r.attributes['set-point-c'] }
+  try:
+    sensors = r.get_rel('remote-sensors')
+  except:
+    sensors = []
+
+  for s in sensors:
+    sensor_name = s.attributes['name']
+    print(r.attributes['name'], all_states[sensor_name])
+    print(r.attributes['active'])
+      
+    # If someone pokes the override button in the app, override it!
+    if mods_by_us[room_name]['State'] == False and r.attributes['active'] == True:
+      print("Someone manually activated this room - override for 8h!")
+      mods_by_us[room_name]['State'] = True
+      mods_by_us[room_name]['LastSeen'] = time.time() + 8*3600.0
+      r.update({'active': True, 'set-point-c': mods_by_us[room_name]['Temp']})
+    # Do the switch
+    if all_states[sensor_name] == 'false' and r.attributes['current-temperature-c'] < pet_max and r.attributes['current-temperature-c'] > pet_min:
+      print("Room",room_name,"reports inactive from ecobee", (time.time() - mods_by_us[room_name]['LastSeen'])/3600.0)
+      my_away_delay = away_delay_hours['default']
+      if room_name in away_delay_hours:
+        my_away_delay = away_delay_hours[room_name]
+      if mods_by_us[room_name]['LastSeen'] < (time.time() - my_away_delay*3600.0):
+        print("Room",room_name,"has been inactive for more than",my_away_delay,"hours")
+        if r.attributes['active'] == True:
+          # Set inactive
+          mods_by_us[room_name]['State'] = False
+          mods_by_us[room_name]['When'] = time.time()
+          mods_by_us[room_name]['Temp'] = r.attributes['set-point-c']
+          r.update({'active': False})
+    elif all_states[sensor_name] == 'false':
+      print("FORCE ACTIVE FOR PET MODE", r.attributes['current-temperature-c'], pet_min, pet_max)
+      # Make active for pets!
+      r.update({'active': True, 'set-point-c': mods_by_us[room_name]['Temp']})
+      # Set state to true, but update _nothing_ else about this - that way, it will
+      # be able to go back into away when below the pet minimum...
+      mods_by_us[room_name]['State'] = True
+    else:
+      print("Room",room_name,"reports active from ecobee")
+
+      # Update only if lower, to allow for that override
+      if mods_by_us[room_name]['LastSeen'] < time.time():
+        mods_by_us[room_name]['LastSeen'] = time.time()
+      # If the room becomes active, lets _always_ enable it!
+      if r.attributes['active'] == False:
+        print("Room",room_name,"was inactive, but has seen activity - lets activate!")
+        mods_by_us[room_name]['State'] = True
+        mods_by_us[room_name]['When'] = time.time()
+        # Remember to reset the temprature!
+        r.update({'active': True, 'set-point-c': mods_by_us[room_name]['Temp']})
+
+f = open("mods_by_us.pic", "wb")
+pickle.dump(mods_by_us, f)
+f.close()
