@@ -132,6 +132,13 @@ if os.path.exists("last_bad_intake.pic"):
 else:
   last_bad_intake = time.time()
 
+if os.path.exists("last_on_time.pic"):
+  r = open("last_on_time.pic", "rb")
+  last_on_time = pickle.load(r)
+  r.close()
+else:
+  last_on_time = time.time()
+
 if os.path.exists("last_intake.pic"):
   r = open("last_intake.pic", "rb")
   last_intake = pickle.load(r)
@@ -458,11 +465,16 @@ for room in rooms:
 
 total_count = 0
 open_count = 0
+active_list = {}
 for room in rooms:
   for vent in room.get_rel('vents'):
     total_count += 1
     if get_state(vent) == 100:
       open_count += 1
+      active_list[room.attributes['name']] = True
+
+print("Active rooms:",active_list.keys())
+
 direct_vent_percent = direct_vent_percent_cool
 if heating or mode == 'heat':
   direct_vent_percent = direct_vent_percent_heat
@@ -708,17 +720,27 @@ if (cooling == False and heating == False and can_use_intake == False) or (only_
   cooling = False
   parking = True
 
+last_on_delta = time.time() - last_on_time
+fresh_air_time = False
+print("Last on delta:",last_on_delta)
+if last_on_delta < fresh_air_delta and (not cooling) and (not heating):
+  # consider opening all of the vents if we're both neither heating/cooking,
+  # and we haven't changed state recently
+  fresh_air_time = True
+  print("Enabling fresh air time!")
+  
 
 # Check if the intake will make things better or worse....
 intake_would_be_good = True
 highest_intake_diff = 0
+fresh_list = []
 for room in rooms:
   name = room.attributes['name']
   if name in linked_to_intake:
     print("Skipping",name)
     continue
   for vent in room.get_rel('vents'):
-    if get_state(vent) == 100:
+    if get_state(vent) == 100 or fresh_air_time:
       # Would running the fan bring us _towards_ our destination temprature?  This is _indenpendant_ of
       # our current heat/cool mode - it's entirely around "would it make it closer".  So if a room is overheated,
       # this will bring it down _without_ switching to cool, for example...
@@ -738,16 +760,40 @@ for room in rooms:
         # cause ctemp to move up _towards_ dtemp, so that case is good
         #
         # if intake temp is below ctemp, but above dtemp, then it would cause
-        # ctemp to drop _towards_ dtemp, so that case is good
+       # ctemp to drop _towards_ dtemp, so that case is good
         #
         # if intake temp is equal to ctemp, or equal to dtemp, then there is no harm - but
         # if _everyone_ is close, we shouldn't bother?
         intake_diff = math.fabs(ctemp - intake_temp)
         if intake_diff > highest_intake_diff:
           highest_intake_diff = intake_diff
+        # reset 
+        if fresh_air_time and intake_would_be_good:
+          fresh_list.append(vent.attributes['name'])
+        # Reset the intake_would_be_good flag each iteration when in fresh air
+        # time, since it's no longer a global stop
+        if fresh_air_time:
+          intake_would_be_good = True
 if highest_intake_diff < 0.5:
   print("Temptratures are all close enough in open rooms, so don't bother...",highest_intake_diff)
   intake_would_be_good = False
+  fresh_air_time = False
+
+# If we're doing fresh_air_time, twiddle the ventos
+if fresh_air_time and intake_would_be_good and len(fresh_list) > 0:
+  for room in rooms:
+    name = room.attributes['name']
+    if name in linked_to_intake:
+      print("Skipping",name)
+      continue
+    for vent in room.get_rel('vents'):
+      if vent.attributes['name'] in fresh_list:
+        print("Opening", vent.attributes['name'],"for fresh air time")
+        set_state(vent, 100)
+      else:
+        print("Closing", vent.attributes['name'],"for fresh air time")
+        set_state(vent, 0)
+sys.exit(1)
 
 
 # if we have to only move a small amount, tell the
@@ -792,6 +838,7 @@ my_fan = FanMode.AUTO
 if ts.thermostat_list[0].runtime.desired_fan_mode == 'on' or intake_would_be_good:
   my_fan = FanMode.ON
 if cooling:
+  last_on_time = time.time()
   max_desired = (temp - cool_offs)
   desired = ts.thermostat_list[0].runtime.desired_cool
   if desired !=  max_desired:
@@ -800,6 +847,7 @@ if cooling:
   else:
     print("Cooling is okay!")
 elif heating:
+  last_on_time = time.time()
   max_desired = (temp + heat_offs)
   desired = ts.thermostat_list[0].runtime.desired_heat
   print("max:",max_desired,desired,temp)
@@ -808,7 +856,9 @@ elif heating:
     update_thermostat_response = ecobee_service.set_hold(cool_hold_temp=(max_desired / 10)-4, heat_hold_temp=(max_desired / 10), hold_type=HoldType.INDEFINITE, fan_mode = my_fan)
   else:
     print("Heating is okay!")
-elif parking:
+# don't park if we're in fresh_air_time
+elif parking and (not fresh_air_time):
+  #last_on_time = time.time()
   if ts.thermostat_list[0].settings.hvac_mode=='cool':
     desired = ts.thermostat_list[0].runtime.desired_cool
     hvac_mode = 'cool'
@@ -992,4 +1042,8 @@ for r in rooms:
 
 f = open("mods_by_us.pic", "wb")
 pickle.dump(mods_by_us, f)
+f.close()
+
+f = open("last_on_time.pic", "wb")
+pickle.dump(last_on_time, f)
 f.close()
