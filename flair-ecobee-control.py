@@ -793,8 +793,6 @@ if fresh_air_time and intake_would_be_good and len(fresh_list) > 0:
       else:
         print("Closing", vent.attributes['name'],"for fresh air time")
         set_state(vent, 0)
-sys.exit(1)
-
 
 # if we have to only move a small amount, tell the
 # thermostat that instead of the max delta specified
