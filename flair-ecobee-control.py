@@ -723,7 +723,7 @@ if (cooling == False and heating == False and can_use_intake == False) or (only_
 last_on_delta = time.time() - last_on_time
 fresh_air_time = False
 print("Last on delta:",last_on_delta)
-if last_on_delta < fresh_air_delta and (not cooling) and (not heating):
+if last_on_delta > fresh_air_delta and (not cooling) and (not heating):
   # consider opening all of the vents if we're both neither heating/cooking,
   # and we haven't changed state recently
   fresh_air_time = True
@@ -744,6 +744,13 @@ for room in rooms:
       # Would running the fan bring us _towards_ our destination temprature?  This is _indenpendant_ of
       # our current heat/cool mode - it's entirely around "would it make it closer".  So if a room is overheated,
       # this will bring it down _without_ switching to cool, for example...
+      if fresh_air_time and not name in intake_calc_ctemp:
+        dtemp = room.attributes['set-point-c']
+        dtemp = dtemp_adj(mode, dtemp)
+        ctemp = room.attributes['current-temperature-c']
+        intake_calc_ctemp[name] = ctemp
+        intake_calc_dtemp[name] = dtemp
+        
       if name in intake_calc_ctemp:
         print("room",name,intake_temp,"curr:",intake_calc_ctemp[name], "dest:",intake_calc_dtemp[name])
         ctemp = intake_calc_ctemp[name]
@@ -899,7 +906,7 @@ print(ts.thermostat_list[0].runtime.desired_cool)
 print(ts.thermostat_list[0].runtime.desired_heat)
 
 if use_intake_room and (not disable_heat_due_to_overload):
-  if can_use_intake:
+  if can_use_intake or intake_would_be_good:
     if ts.thermostat_list[0].runtime.desired_fan_mode != 'on':
       print("Turning on ecobee fan...")
       update_thermostat_response = ecobee_service.set_hold(cool_hold_temp = ts.thermostat_list[0].runtime.desired_cool / 10.0, heat_hold_temp = ts.thermostat_list[0].runtime.desired_heat / 10.0, fan_mode = FanMode.ON,  hold_type=HoldType.INDEFINITE)
